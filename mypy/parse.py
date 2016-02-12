@@ -32,7 +32,7 @@ from mypy.nodes import (
 from mypy import defaults
 from mypy import nodes
 from mypy.errors import Errors, CompileError
-from mypy.types import Void, Type, CallableType, AnyType, UnboundType
+from mypy.types import Void, Type, CallableType, AnyType, UnboundType, TupleType
 from mypy.parsetype import (
     parse_type, parse_types, parse_signature, TypeParseError, parse_str_as_signature
 )
@@ -91,6 +91,11 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
 
 def convert_ast(ast):
     return ASTConverter().visit(ast)
+
+def parse_type_comment(type_comment):
+    typ = typed_ast.parse(type_comment, '<type_comment>', 'eval')
+    print("type: " + dump(typ.body))
+    return TypeConverter().visit(typ.body)
 
 
 def iter_fields(node):
@@ -247,11 +252,11 @@ def find(f, seq):
   return None
 
 class ASTConverter(NodeTransformer):
-    def visit_list(self, l):
-        return [self.visit(e) for e in l]
-
     def visit_NoneType(self, n):
         return None
+
+    def visit_list(self, l):
+        return [self.visit(e) for e in l]
 
     def from_operator(self, op):
         if isinstance(op, typed_ast.Add):
@@ -324,9 +329,28 @@ class ASTConverter(NodeTransformer):
     #             stmt* body, expr* decorator_list, expr? returns, string? type_comment)
     @with_line
     def visit_FunctionDef(self, n):
+        if n.type_comment is not None:
+            func_type_ast = typed_ast.parse(n.type_comment, '<func_type>', 'func_type')
+            arg_types_ast = func_type_ast.argtypes
+            return_type_ast = func_type_ast.returns
+        else:
+            arg_types_ast = [a.annotation for a in n.args.args]
+            return_type_ast = n.returns
+
+        func_type = None
+        if any(arg_types_ast) or return_type_ast:
+            arg_types = [a if a is not None else AnyType() for
+                         a in TypeConverter().visit(arg_types_ast)]
+            func_type = CallableType(arg_types,
+                                     [ARG_POS for _ in arg_types],
+                                     [a.arg for a in n.args.args],
+                                     TypeConverter().visit(return_type_ast),
+                                     None)
+
         return FuncDef(n.name,
                        self.visit(n.args.args),
-                       self.as_block(n.body, n.lineno))
+                       self.as_block(n.body, n.lineno),
+                       func_type)
 
     # TODO: AsyncFunctionDef(identifier name, arguments args,
     #                  stmt* body, expr* decorator_list, expr? returns, string? type_comment)
@@ -365,8 +389,7 @@ class ASTConverter(NodeTransformer):
     def visit_Assign(self, n):
         typ = None
         if n.type_comment:
-            typ = UnboundType(n.type_comment)
-            # TODO: parse more kinds of type comments correctly
+            typ = parse_type_comment(n.type_comment)
 
         return AssignmentStmt(self.visit(n.targets),
                               self.visit(n.value),
@@ -700,6 +723,40 @@ class ASTConverter(NodeTransformer):
         # TODO: defaults
         # TODO: arg kind
         return Argument(Var(n.arg), self.visit(n.annotation), None, ARG_POS)
+
+class TypeConverter(NodeTransformer):
+    def visit_NoneType(self, n):
+        return None
+
+    def visit_list(self, l):
+        return [self.visit(e) for e in l]
+
+    def visit_Name(self, n):
+        return UnboundType(n.id)
+
+    def visit_NameConstant(self, n):
+        return UnboundType(str(n.value))
+
+    # Subscript(expr value, slice slice, expr_context ctx)
+    def visit_Subscript(self, n):
+        assert isinstance(n.value, typed_ast.Name)
+        assert isinstance(n.slice, typed_ast.Index)
+
+        if isinstance(n.slice.value, typed_ast.Tuple):
+            params = self.visit(n.slice.value.elts)
+        else:
+            params = [self.visit(n.slice.value)]
+
+        return UnboundType(n.value.id, params)
+
+    def visit_Tuple(self, n):
+        return TupleType(self.visit(n.elts), None, implicit=True)
+
+
+    # FunctionType(expr* argtypes, expr returns)
+    # def visit_FunctionType(self, n):
+    #     pass
+
 
 class Parser:
     """Mypy parser that parses a string into an AST.

@@ -442,149 +442,149 @@ MypyFile:1(
 --     IntExpr(0)
 --     int?))
 -- 
--- [case testFunctionDefWithType]
--- def f(y: str) -> int:
---   return
--- class A:
---   def f(self, a: int, b: Any) -> x:
---     pass
---   def g(self) -> Any:
---     pass
--- [out]
--- MypyFile:1(
---   FuncDef:1(
---     f
---     Args(
---       Var(y))
---     def (y: str?) -> int?
---     Block:1(
---       ReturnStmt:2()))
---   ClassDef:3(
---     A
---     FuncDef:4(
---       f
---       Args(
---         Var(self)
---         Var(a)
---         Var(b))
---       def (self: Any, a: int?, b: Any?) -> x?
---       Block:4(
---         PassStmt:5()))
---     FuncDef:6(
---       g
---       Args(
---         Var(self))
---       def (self: Any) -> Any?
---       Block:6(
---         PassStmt:7()))))
--- 
--- [case testFuncWithNoneReturn]
--- def f() -> None:
---   pass
--- [out]
--- MypyFile:1(
---   FuncDef:1(
---     f
---     def () -> None?
---     Block:1(
---       PassStmt:2())))
--- 
--- [case testVarDefWithGenericType]
--- x = None # type: List[str]
--- y = None # type: Dict[int, Any]
--- [out]
--- MypyFile:1(
---   AssignmentStmt:1(
---     NameExpr(x)
---     NameExpr(None)
---     List?[str?])
---   AssignmentStmt:2(
---     NameExpr(y)
---     NameExpr(None)
---     Dict?[int?, Any?]))
--- 
--- [case testSignatureWithGenericTypes]
--- def f(y: t[Any, x]) -> a[b[c], d]:
---     pass
--- [out]
--- MypyFile:1(
---   FuncDef:1(
---     f
---     Args(
---       Var(y))
---     def (y: t?[Any?, x?]) -> a?[b?[c?], d?]
---     Block:1(
---       PassStmt:2())))
--- 
--- [case testParsingExpressionsWithLessAndGreaterThan]
--- # The operators < > can sometimes be confused with generic types.
--- x = a < b > c
--- f(x < b, y > c)
--- a < b > 1
--- x < b, y > 2
--- (a < b > c)
--- [out]
--- MypyFile:1(
---   AssignmentStmt:2(
---     NameExpr(x)
---     ComparisonExpr:2(
---       <
---       >
---       NameExpr(a)
---       NameExpr(b)
---       NameExpr(c)))
---   ExpressionStmt:3(
---     CallExpr:3(
---       NameExpr(f)
---       Args(
---         ComparisonExpr:3(
---           <
---           NameExpr(x)
---           NameExpr(b))
---         ComparisonExpr:3(
---           >
---           NameExpr(y)
---           NameExpr(c)))))
---   ExpressionStmt:4(
---     ComparisonExpr:4(
---       <
---       >
---       NameExpr(a)
---       NameExpr(b)
---       IntExpr(1)))
---   ExpressionStmt:5(
---     TupleExpr:5(
---       ComparisonExpr:5(
---         <
---         NameExpr(x)
---         NameExpr(b))
---       ComparisonExpr:5(
---         >
---         NameExpr(y)
---         IntExpr(2))))
---   ExpressionStmt:6(
---     ComparisonExpr:6(
---       <
---       >
---       NameExpr(a)
---       NameExpr(b)
---       NameExpr(c))))
--- 
--- [case testLineContinuation]
--- if (1 +
---     2):
---   pass
--- [out]
--- MypyFile:1(
---   IfStmt:1(
---     If(
---       OpExpr:1(
---         +
---         IntExpr(1)
---         IntExpr(2)))
---     Then(
---       PassStmt:3())))
--- 
+[case testFunctionDefWithType]
+def f(y: str) -> int:
+  return
+class A:
+  def f(self, a: int, b: Any) -> x:
+    pass
+  def g(self) -> Any:
+    pass
+[out]
+MypyFile:1(
+  FuncDef:1(
+    f
+    Args(
+      Var(y))
+    def (y: str?) -> int?
+    Block:1(
+      ReturnStmt:2()))
+  ClassDef:3(
+    A
+    FuncDef:4(
+      f
+      Args(
+        Var(self)
+        Var(a)
+        Var(b))
+      def (self: Any, a: int?, b: Any?) -> x?
+      Block:4(
+        PassStmt:5()))
+    FuncDef:6(
+      g
+      Args(
+        Var(self))
+      def (self: Any) -> Any?
+      Block:6(
+        PassStmt:7()))))
+
+[case testFuncWithNoneReturn]
+def f() -> None:
+  pass
+[out]
+MypyFile:1(
+  FuncDef:1(
+    f
+    def () -> None?
+    Block:1(
+      PassStmt:2())))
+
+[case testVarDefWithGenericType]
+x = None # type: List[str]
+y = None # type: Dict[int, Any]
+[out]
+MypyFile:1(
+  AssignmentStmt:1(
+    NameExpr(x)
+    NameExpr(None)
+    List?[str?])
+  AssignmentStmt:2(
+    NameExpr(y)
+    NameExpr(None)
+    Dict?[int?, Any?]))
+
+[case testSignatureWithGenericTypes]
+def f(y: t[Any, x]) -> a[b[c], d]:
+    pass
+[out]
+MypyFile:1(
+  FuncDef:1(
+    f
+    Args(
+      Var(y))
+    def (y: t?[Any?, x?]) -> a?[b?[c?], d?]
+    Block:1(
+      PassStmt:2())))
+
+[case testParsingExpressionsWithLessAndGreaterThan]
+# The operators < > can sometimes be confused with generic types.
+x = a < b > c
+f(x < b, y > c)
+a < b > 1
+x < b, y > 2
+(a < b > c)
+[out]
+MypyFile:1(
+  AssignmentStmt:2(
+    NameExpr(x)
+    ComparisonExpr:2(
+      <
+      >
+      NameExpr(a)
+      NameExpr(b)
+      NameExpr(c)))
+  ExpressionStmt:3(
+    CallExpr:3(
+      NameExpr(f)
+      Args(
+        ComparisonExpr:3(
+          <
+          NameExpr(x)
+          NameExpr(b))
+        ComparisonExpr:3(
+          >
+          NameExpr(y)
+          NameExpr(c)))))
+  ExpressionStmt:4(
+    ComparisonExpr:4(
+      <
+      >
+      NameExpr(a)
+      NameExpr(b)
+      IntExpr(1)))
+  ExpressionStmt:5(
+    TupleExpr:5(
+      ComparisonExpr:5(
+        <
+        NameExpr(x)
+        NameExpr(b))
+      ComparisonExpr:5(
+        >
+        NameExpr(y)
+        IntExpr(2))))
+  ExpressionStmt:6(
+    ComparisonExpr:6(
+      <
+      >
+      NameExpr(a)
+      NameExpr(b)
+      NameExpr(c))))
+
+[case testLineContinuation]
+if (1 +
+    2):
+  pass
+[out]
+MypyFile:1(
+  IfStmt:1(
+    If(
+      OpExpr:1(
+        +
+        IntExpr(1)
+        IntExpr(2)))
+    Then(
+      PassStmt:3())))
+
 -- [case testMultipleVarDef]
 -- x, y = z # type: int, a[c]
 -- [out]

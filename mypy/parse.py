@@ -27,7 +27,7 @@ from mypy.nodes import (
     UnaryExpr, FuncExpr, TypeApplication, PrintStmt, ImportBase, ComparisonExpr,
     StarExpr, YieldFromExpr, NonlocalDecl, DictionaryComprehension,
     SetComprehension, ComplexExpr, EllipsisExpr, YieldExpr, ExecStmt, Argument,
-    BackquoteExpr
+    BackquoteExpr, ARG_POS, ARG_NAMED
 )
 from mypy import defaults
 from mypy import nodes
@@ -36,6 +36,8 @@ from mypy.types import Void, Type, CallableType, AnyType, UnboundType
 from mypy.parsetype import (
     parse_type, parse_types, parse_signature, TypeParseError, parse_str_as_signature
 )
+
+import typed_ast
 
 
 precedence = {
@@ -79,17 +81,625 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
     The pyversion (major, minor) argument determines the Python syntax variant.
     """
     is_stub_file = bool(fnam) and fnam.endswith('.pyi')
-    parser = Parser(fnam,
-                    errors,
-                    pyversion,
-                    custom_typing_module,
-                    is_stub_file=is_stub_file,
-                    implicit_any=implicit_any)
-    tree = parser.parse(source)
+    ast = typed_ast.parse(source, fnam, 'exec')
+    print(dump(ast, True, True))
+    tree = convert_ast(ast)
     tree.path = fnam
     tree.is_stub = is_stub_file
     return tree
 
+
+def convert_ast(ast):
+    return ASTConverter().visit(ast)
+
+
+def iter_fields(node):
+    """
+    Yield a tuple of ``(fieldname, value)`` for each field in ``node._fields``
+    that is present on *node*.
+    """
+    for field in node._fields:
+        try:
+            yield field, getattr(node, field)
+        except AttributeError:
+            pass
+
+def dump(node, annotate_fields=True, include_attributes=False):
+    """
+    Return a formatted dump of the tree in *node*.  This is mainly useful for
+    debugging purposes.  The returned string will show the names and the values
+    for fields.  This makes the code impossible to evaluate, so if evaluation is
+    wanted *annotate_fields* must be set to False.  Attributes such as line
+    numbers and column offsets are not dumped by default.  If this is wanted,
+    *include_attributes* can be set to True.
+    """
+    def _format(node):
+        if isinstance(node, typed_ast.AST):
+            fields = [(a, _format(b)) for a, b in iter_fields(node)]
+            rv = '%s(%s' % (node.__class__.__name__, ', '.join(
+                ('%s=%s' % field for field in fields)
+                if annotate_fields else
+                (b for a, b in fields)
+            ))
+            if include_attributes and node._attributes:
+                rv += fields and ', ' or ' '
+                rv += ', '.join('%s=%s' % (a, _format(getattr(node, a)))
+                                for a in node._attributes)
+            return rv + ')'
+        elif isinstance(node, list):
+            return '[%s]' % ', '.join(_format(x) for x in node)
+        return repr(node)
+    if not isinstance(node, typed_ast.AST):
+        raise TypeError('expected AST, got %r' % node.__class__.__name__)
+    return _format(node)
+
+
+class NodeVisitor(object):
+    """
+    A node visitor base class that walks the abstract syntax tree and calls a
+    visitor function for every node found.  This function may return a value
+    which is forwarded by the `visit` method.
+
+    This class is meant to be subclassed, with the subclass adding visitor
+    methods.
+
+    Per default the visitor functions for the nodes are ``'visit_'`` +
+    class name of the node.  So a `TryFinally` node visit function would
+    be `visit_TryFinally`.  This behavior can be changed by overriding
+    the `visit` method.  If no visitor function exists for a node
+    (return value `None`) the `generic_visit` visitor is used instead.
+
+    Don't use the `NodeVisitor` if you want to apply changes to nodes during
+    traversing.  For this a special visitor exists (`NodeTransformer`) that
+    allows modifications.
+    """
+
+    def visit(self, node):
+        """Visit a node."""
+        method = 'visit_' + node.__class__.__name__
+        visitor = getattr(self, method, self.generic_visit)
+        return visitor(node)
+
+    def generic_visit(self, node):
+        """Called if no explicit visitor function exists for a node."""
+        for field, value in iter_fields(node):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, typed_ast.AST):
+                        self.visit(item)
+            elif isinstance(value, typed_ast.AST):
+                self.visit(value)
+
+
+class NodeTransformer(NodeVisitor):
+    """
+    A :class:`NodeVisitor` subclass that walks the abstract syntax tree and
+    allows modification of nodes.
+
+    The `NodeTransformer` will walk the AST and use the return value of the
+    visitor methods to replace or remove the old node.  If the return value of
+    the visitor method is ``None``, the node will be removed from its location,
+    otherwise it is replaced with the return value.  The return value may be the
+    original node in which case no replacement takes place.
+
+    Here is an example transformer that rewrites all occurrences of name lookups
+    (``foo``) to ``data['foo']``::
+
+       class RewriteName(NodeTransformer):
+
+           def visit_Name(self, node):
+               return copy_location(Subscript(
+                   value=Name(id='data', ctx=Load()),
+                   slice=Index(value=Str(s=node.id)),
+                   ctx=node.ctx
+               ), node)
+
+    Keep in mind that if the node you're operating on has child nodes you must
+    either transform the child nodes yourself or call the :meth:`generic_visit`
+    method for the node first.
+
+    For nodes that were part of a collection of statements (that applies to all
+    statement nodes), the visitor may also return a list of nodes rather than
+    just a single node.
+
+    Usually you use the transformer like this::
+
+       node = YourTransformer().visit(node)
+    """
+
+    def generic_visit(self, node):
+        raise RuntimeError('Node not implemented: ' + str(type(node)))
+
+        for field, old_value in iter_fields(node):
+            if isinstance(old_value, list):
+                new_values = []
+                for value in old_value:
+                    if isinstance(value, typed_ast.AST):
+                        value = self.visit(value)
+                        if value is None:
+                            continue
+                        elif not isinstance(value, typed_ast.AST):
+                            new_values.extend(value)
+                            continue
+                    new_values.append(value)
+                old_value[:] = new_values
+            elif isinstance(old_value, typed_ast.AST):
+                new_node = self.visit(old_value)
+                if new_node is None:
+                    delattr(node, field)
+                else:
+                    setattr(node, field, new_node)
+        return node
+
+from functools import wraps
+def with_line(f):
+    @wraps(f)
+    def wrapper(self, ast):
+        node = f(self, ast)
+        node.set_line(ast.lineno)
+        return node
+    return wrapper
+
+def find(f, seq):
+  for item in seq:
+    if f(item):
+      return item
+  return None
+
+class ASTConverter(NodeTransformer):
+    def visit_list(self, l):
+        return [self.visit(e) for e in l]
+
+    def visit_NoneType(self, n):
+        return None
+
+    def from_operator(self, op):
+        if isinstance(op, typed_ast.Add):
+            return '+'
+        elif isinstance(op, typed_ast.Sub):
+            return '-'
+        elif isinstance(op, typed_ast.Mult):
+            return '*'
+        elif isinstance(op, typed_ast.MatMult):
+            raise RuntimeError('No conversion for MatMult operator')
+        elif isinstance(op, typed_ast.Div):
+            return '/'
+        elif isinstance(op, typed_ast.Mod):
+            return '%'
+        elif isinstance(op, typed_ast.Pow):
+            return '**'
+        elif isinstance(op, typed_ast.LShift):
+            return '<<'
+        elif isinstance(op, typed_ast.RShift):
+            return '>>'
+        elif isinstance(op, typed_ast.BitOr):
+            return '|'
+        elif isinstance(op, typed_ast.BitXor):
+            return '^'
+        elif isinstance(op, typed_ast.BitAnd):
+            return '&'
+        elif isinstance(op, typed_ast.FloorDiv):
+            return '//'
+        raise RuntimeError('Unknown operator ' + str(type(op)))
+
+    def from_comp_operator(self, op):
+        if isinstance(op, typed_ast.Gt):
+            return '>'
+        elif isinstance(op, typed_ast.Lt):
+            return '<'
+        elif isinstance(op, typed_ast.Eq):
+            return '=='
+        elif isinstance(op, typed_ast.GtE):
+            return '>='
+        elif isinstance(op, typed_ast.LtE):
+            return '<='
+        elif isinstance(op, typed_ast.NotEq):
+            return '!='
+        elif isinstance(op, typed_ast.Is):
+            return 'is'
+        elif isinstance(op, typed_ast.IsNot):
+            return 'is not'
+        elif isinstance(op, typed_ast.In):
+            return 'in'
+        elif isinstance(op, typed_ast.NotIn):
+            return 'not in'
+        else:
+            raise RuntimeError('Unknown comparison operator ' + str(type(op)))
+
+    def as_block(self, stmts, lineno):
+        b = None
+        if stmts:
+            b = Block(self.visit(stmts))
+            b.set_line(lineno)
+        return b
+
+
+    def visit_Module(self, mod):
+        body = [self.visit(b) for b in mod.body]
+
+        return MypyFile(body, [], False, { ti.lineno for ti in mod.type_ignores }, None)
+
+    # --- stmt ---
+    # FunctionDef(identifier name, arguments args,
+    #             stmt* body, expr* decorator_list, expr? returns, string? type_comment)
+    @with_line
+    def visit_FunctionDef(self, n):
+        return FuncDef(n.name,
+                       self.visit(n.args.args),
+                       self.as_block(n.body, n.lineno))
+
+    # TODO: AsyncFunctionDef(identifier name, arguments args,
+    #                  stmt* body, expr* decorator_list, expr? returns, string? type_comment)
+
+    # ClassDef(identifier name,
+    #  expr* bases,
+    #  keyword* keywords,
+    #  stmt* body,
+    #  expr* decorator_list)
+    @with_line
+    def visit_ClassDef(self, n):
+        metaclass = find(lambda x: x.arg == 'metaclass', n.keywords)
+
+        return ClassDef(n.name,
+                        Block(self.visit(n.body)),
+                        None,
+                        self.visit(n.bases),
+                        metaclass=metaclass and metaclass.value)
+
+
+    # Return(expr? value)
+    @with_line
+    def visit_Return(self, n):
+        return ReturnStmt(self.visit(n.value))
+
+
+    # Delete(expr* targets)
+    @with_line
+    def visit_Delete(self, n):
+        # TODO: process more than the first target
+        return DelStmt(self.visit(n.targets[0]))
+
+
+    # Assign(expr* targets, expr value, string? type_comment)
+    @with_line
+    def visit_Assign(self, n):
+        typ = None
+        if n.type_comment:
+            typ = UnboundType(n.type_comment)
+            # TODO: parse more kinds of type comments correctly
+
+        return AssignmentStmt(self.visit(n.targets),
+                              self.visit(n.value),
+                              type=typ)
+
+    # AugAssign(expr target, operator op, expr value)
+    @with_line
+    def visit_AugAssign(self, n):
+        return AssignmentStmt(self.from_operator(n.op),
+                              self.visit(n.target),
+                              self.visit(n.value))
+
+
+    # For(expr target, expr iter, stmt* body, stmt* orelse, string? type_comment)
+    @with_line
+    def visit_For(self, n):
+        return ForStmt(self.visit(n.target),
+                       self.visit(n.iter),
+                       self.as_block(n.body, n.lineno),
+                       self.as_block(n.orelse, n.lineno))
+
+    # TODO: AsyncFor(expr target, expr iter, stmt* body, stmt* orelse)
+    # While(expr test, stmt* body, stmt* orelse)
+    @with_line
+    def visit_While(self, n):
+        return WhileStmt(self.visit(n.test),
+                         self.as_block(n.body, n.lineno),
+                         self.as_block(n.orelse, n.lineno))
+
+    # If(expr test, stmt* body, stmt* orelse)
+    @with_line
+    def visit_If(self, n):
+        return IfStmt([self.visit(n.test)],
+                      [self.as_block(n.body, n.lineno)],
+                      self.as_block(n.orelse, n.lineno))
+
+    # With(withitem* items, stmt* body, string? type_comment)
+    @with_line
+    def visit_With(self, n):
+        return WithStmt([self.visit(i.context_expr) for i in n.items],
+                        [self.visit(i.optional_vars) for i in n.items],
+                        Block(self.visit(n.body)))
+
+    # TODO: AsyncWith(withitem* items, stmt* body)
+
+    # Raise(expr? exc, expr? cause)
+    @with_line
+    def visit_Raise(self, n):
+        return RaiseStmt(self.visit(n.exc), self.visit(n.cause))
+
+    # Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)
+    @with_line
+    def visit_Try(self, n):
+        vs = [NameExpr(h.name) for h in n.handlers]
+        types = [self.visit(h.type) for h in n.handlers]
+        handlers = [self.as_block(h.body, h.lineno) for h in n.handlers]
+
+        return TryStmt(self.as_block(n.body, n.lineno),
+                       vs,
+                       types,
+                       handlers,
+                       self.as_block(n.orelse, n.lineno),
+                       self.as_block(n.finalbody, n.lineno))
+
+    # Assert(expr test, expr? msg)
+    @with_line
+    def visit_Assert(self, n):
+        return AssertStmt(self.visit(n.test))
+
+
+    # Import(alias* names)
+    @with_line
+    def visit_Import(self, n):
+        return Import([(a.name, a.asname) for a in n.names])
+
+
+    # ImportFrom(identifier? module, alias* names, int? level)
+    @with_line
+    def visit_ImportFrom(self, n):
+        if len(n.names) == 1 and n.names[0].name == '*':
+            return ImportAll(n.module, n.level)
+        else:
+            return ImportFrom(n.module,
+                              n.level,
+                              [(a.name, a.asname) for a in n.names])
+
+
+    # Global(identifier* names)
+    @with_line
+    def visit_Global(self, n):
+        return GlobalDecl(n.names)
+
+    # Nonlocal(identifier* names)
+    @with_line
+    def visit_Nonlocal(self, n):
+        return NonlocalDecl(n.names)
+
+    # Expr(expr value)
+    @with_line
+    def visit_Expr(self, expr):
+        value = self.visit(expr.value)
+        return ExpressionStmt(value)
+
+    # Pass
+    @with_line
+    def visit_Pass(self, n):
+        return PassStmt()
+
+    # Break
+    @with_line
+    def visit_Break(self, n):
+        return BreakStmt()
+
+    # Continue
+    @with_line
+    def visit_Continue(self, n):
+        return ContinueStmt()
+
+    # --- expr ---
+
+    # BoolOp(boolop op, expr* values)
+    @with_line
+    def visit_BoolOp(self, n):
+        # mypy translates (1 and 2 and 3) as (1 and (2 and 3))
+        assert len(n.values) >= 2
+        op = None
+        if isinstance(n.op, typed_ast.And):
+            op = 'and'
+        elif isinstance(n.op, typed_ast.Or):
+            op = 'or'
+        else:
+            raise RuntimeError('unknown BoolOp ' + str(type(n)))
+
+        # !!! inefficient!
+        def group(vals):
+            if len(vals) == 2:
+                return OpExpr(op, vals[0], vals[1])
+            else:
+                return OpExpr(op, vals[0], group(vals[1:]))
+
+        return group(self.visit(n.values))
+
+    # BinOp(expr left, operator op, expr right)
+    @with_line
+    def visit_BinOp(self, n):
+        op = self.from_operator(n.op)
+
+        if op is None:
+            raise RuntimeError('cannot translate BinOp ' + str(type(n.op)))
+
+        return OpExpr(op, self.visit(n.left), self.visit(n.right))
+
+    # UnaryOp(unaryop op, expr operand)
+    @with_line
+    def visit_UnaryOp(self, n):
+        op = None
+        if isinstance(n.op, typed_ast.Invert):
+            op = '-'
+        elif isinstance(n.op, typed_ast.Not):
+            op = 'not'
+        elif isinstance(n.op, typed_ast.UAdd):
+            op = '+'
+        elif isinstance(n.op, typed_ast.USub):
+            op = '-'
+
+        if op is None:
+            raise RuntimeError('cannot translate UnaryOp ' + str(type(n.op)))
+
+        return UnaryExpr(op, self.visit(n.operand))
+
+
+    # Lambda(arguments args, expr body)
+    @with_line
+    def visit_Lambda(self, n):
+        return FuncExpr(self.visit(n.args.args),
+                        self.as_block(n.body, n.lineno))
+
+    # IfExp(expr test, expr body, expr orelse)
+    @with_line
+    def visit_IfExp(self, n):
+        return ConditionalExpr(self.visit(n.test),
+                               self.visit(n.expr),
+                               self.visit(n.orelse))
+
+    # Dict(expr* keys, expr* values)
+    @with_line
+    def visit_Dict(self, n):
+        return DictExpr(zip(self.visit(n.keys), self.visit(n.values)))
+
+    # Set(expr* elts)
+    @with_line
+    def visit_Set(self, n):
+        return SetExpr(self.visit(n.elts))
+
+    # ListComp(expr elt, comprehension* generators)
+    @with_line
+    def visit_ListComp(self, n):
+        return ListComprehension(self.visit_GeneratorExp(n))
+
+    # SetComp(expr elt, comprehension* generators)
+    @with_line
+    def visit_SetComp(self, n):
+        return SetComprehension(self.visit_GeneratorExp(n))
+
+    # DictComp(expr key, expr value, comprehension* generators)
+    @with_line
+    def visit_DictComp(self, n):
+        targets  = [self.visit(c.target) for c in n.generators]
+        iters    = [self.visit(c.iter)   for c in n.generators]
+        ifs_list = [self.visit(c.ifs)    for c in n.generators]
+        return DictionaryComprehension(self.visit(n.key),
+                                       self.visit(n.value),
+                                       targets,
+                                       iters,
+                                       ifs_list)
+
+    # GeneratorExp(expr elt, comprehension* generators)
+    @with_line
+    def visit_GeneratorExp(self, n):
+        targets  = [self.visit(c.target) for c in n.generators]
+        iters    = [self.visit(c.iter)   for c in n.generators]
+        ifs_list = [self.visit(c.ifs)    for c in n.generators]
+        return GeneratorExpr(self.visit(n.elt),
+                             targets,
+                             iters,
+                             ifs_list)
+
+    # TODO: Await(expr value)
+
+    # Yield(expr? value)
+    @with_line
+    def visit_Yield(self, n):
+        return YieldExpr(self.visit(n.value))
+
+    # YieldFrom(expr value)
+    @with_line
+    def visit_YieldFrom(self, n):
+        return YieldFromExpr(self.visit(n.value))
+
+
+    # Compare(expr left, cmpop* ops, expr* comparators)
+    @with_line
+    def visit_Compare(self, n):
+        operators = [self.from_comp_operator(o) for o in n.ops]
+        operands = self.visit([n.left] + n.comparators)
+        return ComparisonExpr(operators, operands)
+
+
+    # Call(expr func, expr* args, keyword* keywords)
+    # def __init__(self, callee: Node, args: List[Node], arg_kinds: List[int],
+    #              arg_names: List[str] = None, analyzed: Node = None) -> None:
+    @with_line
+    def visit_Call(self, n):
+        # TODO: finish this
+        return CallExpr(self.visit(n.func),
+                        [self.visit(arg) for arg in n.args],
+                        [ARG_POS for _ in n.args])
+
+
+    # Num(object n) -- a number as a PyObject.
+    def visit_Num(self, num):
+        if isinstance(num.n, int):
+            return IntExpr(num.n)
+        elif isinstance(num.n, float):
+            return FloatExpr(num.n)
+
+        raise RuntimeError('num not implemented for ' + str(type(num.n)))
+
+    # Str(string s) -- need to specify raw, unicode, etc?
+    def visit_Str(self, n):
+        return StrExpr(n.s)
+
+    # Bytes(bytes s)
+    def visit_Bytes(self, n):
+        return BytesExpr(n.s.decode('utf8'))
+
+
+    # NameConstant(singleton value)
+    def visit_NameConstant(self, n):
+        return NameExpr(str(n.value))
+
+    # Ellipsis
+    def visit_Ellipsis(self, n):
+        return EllipsisExpr()
+
+
+    # Attribute(expr value, identifier attr, expr_context ctx)
+    @with_line
+    def visit_Attribute(self, n):
+        return MemberExpr(self.visit(n.value), n.attr)
+
+    # Subscript(expr value, slice slice, expr_context ctx)
+    @with_line
+    def visit_Subscript(self, n):
+        return IndexExpr(self.visit(n.value), self.visit(n.slice))
+
+    # Starred(expr value, expr_context ctx)
+    def visit_Starred(self, n):
+        return StarExpr(self.visit(n.value))
+
+    # Name(identifier id, expr_context ctx)
+    def visit_Name(self, n):
+        return NameExpr(n.id)
+
+    # List(expr* elts, expr_context ctx)
+    @with_line
+    def visit_List(self, n):
+        return ListExpr([self.visit(e) for e in n.elts])
+
+    # Tuple(expr* elts, expr_context ctx)
+    @with_line
+    def visit_Tuple(self, n):
+        return TupleExpr([self.visit(e) for e in n.elts])
+
+    # --- slice ---
+
+    # Slice(expr? lower, expr? upper, expr? step)
+    # ExtSlice(slice* dims)
+    # Index(expr value)
+    def visit_Index(self, n):
+        return self.visit(n.value)
+
+# --- arguments ---
+    # (arg* args, arg? vararg, arg* kwonlyargs, expr* kw_defaults,
+    #              arg? kwarg, expr* defaults)
+
+    # --- arg ---
+    # (identifier arg, expr? annotation)
+    #        attributes (int lineno, int col_offset)
+    def visit_arg(self, n):
+        # TODO: defaults
+        # TODO: arg kind
+        return Argument(Var(n.arg), self.visit(n.annotation), None, ARG_POS)
 
 class Parser:
     """Mypy parser that parses a string into an AST.

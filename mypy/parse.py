@@ -27,7 +27,7 @@ from mypy.nodes import (
     UnaryExpr, FuncExpr, TypeApplication, PrintStmt, ImportBase, ComparisonExpr,
     StarExpr, YieldFromExpr, NonlocalDecl, DictionaryComprehension,
     SetComprehension, ComplexExpr, EllipsisExpr, YieldExpr, ExecStmt, Argument,
-    BackquoteExpr, ARG_POS, ARG_NAMED
+    BackquoteExpr, ARG_POS, ARG_OPT, ARG_STAR, ARG_NAMED, ARG_STAR2
 )
 from mypy import defaults
 from mypy import nodes
@@ -81,12 +81,19 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
     The pyversion (major, minor) argument determines the Python syntax variant.
     """
     is_stub_file = bool(fnam) and fnam.endswith('.pyi')
-    ast = typed_ast.parse(source, fnam, 'exec')
-    print(dump(ast, True, True))
-    tree = convert_ast(ast)
-    tree.path = fnam
-    tree.is_stub = is_stub_file
-    return tree
+    try:
+        ast = typed_ast.parse(source, fnam, 'exec')
+    except SyntaxError as e:
+        if errors:
+            errors.report(e.lineno, e.text)
+        else:
+            raise
+    else:
+        print(dump(ast, True, True))
+        tree = convert_ast(ast)
+        tree.path = fnam
+        tree.is_stub = is_stub_file
+        return tree
 
 
 def convert_ast(ast):
@@ -327,28 +334,43 @@ class ASTConverter(NodeTransformer):
     # --- stmt ---
     # FunctionDef(identifier name, arguments args,
     #             stmt* body, expr* decorator_list, expr? returns, string? type_comment)
+    # arguments = (arg* args, arg? vararg, arg* kwonlyargs, expr* kw_defaults,
+    #              arg? kwarg, expr* defaults)
     @with_line
     def visit_FunctionDef(self, n):
+        def to_type(type_ast):
+            return TypeConverter().visit(type_ast)
+
+        pos_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_OPT if d else ARG_POS)
+                    for a, d in zip(n.args.args, [None] * (len(n.args.args) - len(n.args.defaults)) + n.args.defaults)]
+        var_arg = [Argument(Var(n.args.vararg.arg), to_type(n.args.vararg.annotation), None, ARG_STAR)] if n.args.vararg is not None else []
+        kw_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_NAMED)
+                   for a, d in zip(n.args.kwonlyargs, [None] * (len(n.args.kwonlyargs) - len(n.args.kw_defaults)) + n.args.kw_defaults)]
+        kwarg = [Argument(Var(n.args.kwarg.arg), to_type(n.args.kwarg.annotation), None, ARG_STAR2)] if n.args.kwarg is not None else []
+        args = pos_args + var_arg + kw_args + kwarg
+
+        arg_kinds = [arg.kind for arg in args]
+        arg_names = [arg.variable.name() for arg in args]
         if n.type_comment is not None:
             func_type_ast = typed_ast.parse(n.type_comment, '<func_type>', 'func_type')
-            arg_types_ast = func_type_ast.argtypes
-            return_type_ast = func_type_ast.returns
+            arg_types = [a if a is not None else AnyType() for
+                         a in TypeConverter().visit(func_type_ast.argtypes)]
+            return_type= TypeConverter().visit(func_type_ast.returns)
         else:
-            arg_types_ast = [a.annotation for a in n.args.args]
-            return_type_ast = n.returns
+            arg_types = [a.type_annotation for a in args]
+            return_type= TypeConverter().visit(n.returns)
 
         func_type = None
-        if any(arg_types_ast) or return_type_ast:
-            arg_types = [a if a is not None else AnyType() for
-                         a in TypeConverter().visit(arg_types_ast)]
-            func_type = CallableType(arg_types,
-                                     [ARG_POS for _ in arg_types],
-                                     [a.arg for a in n.args.args],
-                                     TypeConverter().visit(return_type_ast),
+        if any(arg_types) or return_type:
+            func_type = CallableType([a if a is not None else AnyType() for a in arg_types],
+                                     arg_kinds,
+                                     arg_names,
+                                     return_type,
                                      None)
 
+
         return FuncDef(n.name,
-                       self.visit(n.args.args),
+                       args,
                        self.as_block(n.body, n.lineno),
                        func_type)
 
@@ -381,7 +403,12 @@ class ASTConverter(NodeTransformer):
     @with_line
     def visit_Delete(self, n):
         # TODO: process more than the first target
-        return DelStmt(self.visit(n.targets[0]))
+        if len(n.targets) > 1:
+            tup = TupleExpr(self.visit(n.targets))
+            tup.set_line(n.lineno)
+            return DelStmt(tup)
+        else:
+            return DelStmt(self.visit(n.targets))
 
 
     # Assign(expr* targets, expr value, string? type_comment)
@@ -443,7 +470,7 @@ class ASTConverter(NodeTransformer):
     # Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)
     @with_line
     def visit_Try(self, n):
-        vs = [NameExpr(h.name) for h in n.handlers]
+        vs = [NameExpr(h.name) if h.name is not None else None for h in n.handlers]
         types = [self.visit(h.type) for h in n.handlers]
         handlers = [self.as_block(h.body, h.lineno) for h in n.handlers]
 
@@ -547,7 +574,7 @@ class ASTConverter(NodeTransformer):
     def visit_UnaryOp(self, n):
         op = None
         if isinstance(n.op, typed_ast.Invert):
-            op = '-'
+            op = '~'
         elif isinstance(n.op, typed_ast.Not):
             op = 'not'
         elif isinstance(n.op, typed_ast.UAdd):
@@ -564,8 +591,22 @@ class ASTConverter(NodeTransformer):
     # Lambda(arguments args, expr body)
     @with_line
     def visit_Lambda(self, n):
-        return FuncExpr(self.visit(n.args.args),
-                        self.as_block(n.body, n.lineno))
+        def to_type(type_ast):
+            return TypeConverter().visit(type_ast)
+
+        pos_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_OPT if d else ARG_POS)
+                    for a, d in zip(n.args.args, [None] * (len(n.args.args) - len(n.args.defaults)) + n.args.defaults)]
+        var_arg = [Argument(Var(n.args.vararg.arg), to_type(n.args.vararg.annotation), None, ARG_STAR)] if n.args.vararg is not None else []
+        kw_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_NAMED)
+                   for a, d in zip(n.args.kwonlyargs, [None] * (len(n.args.kwonlyargs) - len(n.args.kw_defaults)) + n.args.kw_defaults)]
+        kwarg = [Argument(Var(n.args.kwarg.arg), to_type(n.args.kwarg.annotation), None, ARG_STAR2)] if n.args.kwarg is not None else []
+        args = pos_args + var_arg + kw_args + kwarg
+
+        body = typed_ast.Return(n.body)
+        body.lineno = n.lineno
+
+        return FuncExpr(args,
+                        self.as_block([body], n.lineno))
 
     # IfExp(expr test, expr body, expr orelse)
     @with_line
@@ -577,7 +618,7 @@ class ASTConverter(NodeTransformer):
     # Dict(expr* keys, expr* values)
     @with_line
     def visit_Dict(self, n):
-        return DictExpr(zip(self.visit(n.keys), self.visit(n.values)))
+        return DictExpr(list(zip(self.visit(n.keys), self.visit(n.values))))
 
     # Set(expr* elts)
     @with_line
@@ -707,14 +748,15 @@ class ASTConverter(NodeTransformer):
     # --- slice ---
 
     # Slice(expr? lower, expr? upper, expr? step)
+    def visit_Slice(self, n):
+        return SliceExpr(self.visit(n.lower),
+                         self.visit(n.upper),
+                         self.visit(n.step))
+
     # ExtSlice(slice* dims)
     # Index(expr value)
     def visit_Index(self, n):
         return self.visit(n.value)
-
-# --- arguments ---
-    # (arg* args, arg? vararg, arg* kwonlyargs, expr* kw_defaults,
-    #              arg? kwarg, expr* defaults)
 
     # --- arg ---
     # (identifier arg, expr? annotation)
@@ -739,18 +781,31 @@ class TypeConverter(NodeTransformer):
 
     # Subscript(expr value, slice slice, expr_context ctx)
     def visit_Subscript(self, n):
-        assert isinstance(n.value, typed_ast.Name)
         assert isinstance(n.slice, typed_ast.Index)
+
+        value = self.visit(n.value)
+
+        assert isinstance(value, UnboundType)
+        assert not value.args
 
         if isinstance(n.slice.value, typed_ast.Tuple):
             params = self.visit(n.slice.value.elts)
         else:
             params = [self.visit(n.slice.value)]
 
-        return UnboundType(n.value.id, params)
+        return UnboundType(value.name, params)
 
     def visit_Tuple(self, n):
         return TupleType(self.visit(n.elts), None, implicit=True)
+
+    # Attribute(expr value, identifier attr, expr_context ctx)
+    def visit_Attribute(self, n):
+        before_dot = self.visit(n.value)
+
+        assert isinstance(before_dot, UnboundType)
+        assert not before_dot.args
+
+        return UnboundType("{}.{}".format(before_dot.name, n.attr))
 
 
     # FunctionType(expr* argtypes, expr returns)

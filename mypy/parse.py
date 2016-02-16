@@ -32,7 +32,7 @@ from mypy.nodes import (
 from mypy import defaults
 from mypy import nodes
 from mypy.errors import Errors, CompileError
-from mypy.types import Void, Type, CallableType, AnyType, UnboundType, TupleType
+from mypy.types import Void, Type, CallableType, AnyType, UnboundType, TupleType, TypeList, EllipsisType
 from mypy.parsetype import (
     parse_type, parse_types, parse_signature, TypeParseError, parse_str_as_signature
 )
@@ -329,7 +329,11 @@ class ASTConverter(NodeTransformer):
     def visit_Module(self, mod):
         body = [self.visit(b) for b in mod.body]
 
-        return MypyFile(body, [], False, { ti.lineno for ti in mod.type_ignores }, None)
+        return MypyFile(body,
+                        [s for s in body if isinstance(s, ImportBase)],  # TODO: make sure this is all the imports we need
+                        False,
+                        {ti.lineno for ti in mod.type_ignores},
+                        weak_opts=set())
 
     # --- stmt ---
     # FunctionDef(identifier name, arguments args,
@@ -339,6 +343,8 @@ class ASTConverter(NodeTransformer):
     @with_line
     def visit_FunctionDef(self, n):
         def to_type(type_ast):
+            if type_ast:
+                print("type: " + dump(type_ast))
             return TypeConverter().visit(type_ast)
 
         pos_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_OPT if d else ARG_POS)
@@ -365,14 +371,25 @@ class ASTConverter(NodeTransformer):
             func_type = CallableType([a if a is not None else AnyType() for a in arg_types],
                                      arg_kinds,
                                      arg_names,
-                                     return_type,
+                                     return_type if return_type is not None else AnyType(),
                                      None)
 
 
-        return FuncDef(n.name,
+        func_def = FuncDef(n.name,
                        args,
                        self.as_block(n.body, n.lineno),
                        func_type)
+        if n.decorator_list:
+            var = Var(func_def.name())
+            var.is_ready = False
+            var.set_line(n.decorator_list[0].lineno)
+
+            func_def.is_decorated = True
+            func_def.set_line(n.lineno + len(n.decorator_list))
+            func_def.body.set_line(func_def.get_line())
+            return Decorator(func_def, self.visit(n.decorator_list), var)
+        else:
+            return func_def
 
     # TODO: AsyncFunctionDef(identifier name, arguments args,
     #                  stmt* body, expr* decorator_list, expr? returns, string? type_comment)
@@ -384,13 +401,20 @@ class ASTConverter(NodeTransformer):
     #  expr* decorator_list)
     @with_line
     def visit_ClassDef(self, n):
-        metaclass = find(lambda x: x.arg == 'metaclass', n.keywords)
+        metaclass_arg = find(lambda x: x.arg == 'metaclass', n.keywords)
+        metaclass = None
+        if metaclass_arg:
+            metaclass_expr = self.visit(metaclass_arg.value)
+            assert isinstance(metaclass_expr, NameExpr)
+            metaclass = metaclass_expr.name
 
-        return ClassDef(n.name,
+        cdef = ClassDef(n.name,
                         Block(self.visit(n.body)),
                         None,
                         self.visit(n.bases),
-                        metaclass=metaclass and metaclass.value)
+                        metaclass=metaclass)
+        cdef.decorators = self.visit(n.decorator_list)
+        return cdef
 
 
     # Return(expr? value)
@@ -425,7 +449,7 @@ class ASTConverter(NodeTransformer):
     # AugAssign(expr target, operator op, expr value)
     @with_line
     def visit_AugAssign(self, n):
-        return AssignmentStmt(self.from_operator(n.op),
+        return OperatorAssignmentStmt(self.from_operator(n.op),
                               self.visit(n.target),
                               self.visit(n.value))
 
@@ -458,7 +482,7 @@ class ASTConverter(NodeTransformer):
     def visit_With(self, n):
         return WithStmt([self.visit(i.context_expr) for i in n.items],
                         [self.visit(i.optional_vars) for i in n.items],
-                        Block(self.visit(n.body)))
+                        self.as_block(n.body, n.lineno))
 
     # TODO: AsyncWith(withitem* items, stmt* body)
 
@@ -499,7 +523,7 @@ class ASTConverter(NodeTransformer):
         if len(n.names) == 1 and n.names[0].name == '*':
             return ImportAll(n.module, n.level)
         else:
-            return ImportFrom(n.module,
+            return ImportFrom(n.module if n.module is not None else '',
                               n.level,
                               [(a.name, a.asname) for a in n.names])
 
@@ -612,7 +636,7 @@ class ASTConverter(NodeTransformer):
     @with_line
     def visit_IfExp(self, n):
         return ConditionalExpr(self.visit(n.test),
-                               self.visit(n.expr),
+                               self.visit(n.body),
                                self.visit(n.orelse))
 
     # Dict(expr* keys, expr* values)
@@ -680,14 +704,17 @@ class ASTConverter(NodeTransformer):
 
 
     # Call(expr func, expr* args, keyword* keywords)
-    # def __init__(self, callee: Node, args: List[Node], arg_kinds: List[int],
-    #              arg_names: List[str] = None, analyzed: Node = None) -> None:
+    # keyword = (identifier? arg, expr value)
     @with_line
     def visit_Call(self, n):
-        # TODO: finish this
+        def is_stararg(a):
+            return isinstance(a, typed_ast.Starred)
+        def is_star2arg(k):
+            return k.arg is None
         return CallExpr(self.visit(n.func),
-                        [self.visit(arg) for arg in n.args],
-                        [ARG_POS for _ in n.args])
+                        self.visit([a.value if is_stararg(a) else a for a in n.args] + [k.value for k in n.keywords]),
+                        [ARG_STAR if is_stararg(a) else ARG_POS for a in n.args] + [ARG_STAR2 if is_star2arg(k) else ARG_NAMED for k in n.keywords],
+                        [None for _ in n.args] + [k.arg for k in n.keywords])
 
 
     # Num(object n) -- a number as a PyObject.
@@ -720,6 +747,11 @@ class ASTConverter(NodeTransformer):
     # Attribute(expr value, identifier attr, expr_context ctx)
     @with_line
     def visit_Attribute(self, n):
+        if (isinstance(n.value, typed_ast.Call) and
+              isinstance(n.value.func, typed_ast.Name) and
+              n.value.func.id == 'super'):
+            return SuperExpr(n.attr)
+
         return MemberExpr(self.visit(n.value), n.attr)
 
     # Subscript(expr value, slice slice, expr_context ctx)
@@ -728,6 +760,7 @@ class ASTConverter(NodeTransformer):
         return IndexExpr(self.visit(n.value), self.visit(n.slice))
 
     # Starred(expr value, expr_context ctx)
+    @with_line
     def visit_Starred(self, n):
         return StarExpr(self.visit(n.value))
 
@@ -754,6 +787,9 @@ class ASTConverter(NodeTransformer):
                          self.visit(n.step))
 
     # ExtSlice(slice* dims)
+    def visit_ExtSlice(self, n):
+        return TupleExpr(self.visit(n.dims))
+
     # Index(expr value)
     def visit_Index(self, n):
         return self.visit(n.value)
@@ -778,6 +814,10 @@ class TypeConverter(NodeTransformer):
 
     def visit_NameConstant(self, n):
         return UnboundType(str(n.value))
+
+    # Str(string s)
+    def visit_Str(self, n):
+        return parse_type_comment(n.s.strip())
 
     # Subscript(expr value, slice slice, expr_context ctx)
     def visit_Subscript(self, n):
@@ -807,6 +847,13 @@ class TypeConverter(NodeTransformer):
 
         return UnboundType("{}.{}".format(before_dot.name, n.attr))
 
+    # Ellipsis
+    def visit_Ellipsis(self, n):
+        return EllipsisType()
+
+    # List(expr* elts, expr_context ctx)
+    def visit_List(self, n):
+        return TypeList(self.visit(n.elts))
 
     # FunctionType(expr* argtypes, expr returns)
     # def visit_FunctionType(self, n):

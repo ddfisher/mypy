@@ -2503,16 +2503,15 @@ MypyFile:1(
     Metaclass(Bar)
     PassStmt:1()))
 
--- !!! TODO: this
--- [case testQualifiedMetaclass]
--- class Foo(metaclass=foo.Bar): pass
--- [out]
--- MypyFile:1(
---   ClassDef:1(
---     Foo
---     Metaclass(foo.Bar)
---     PassStmt:1()))
--- 
+[case testQualifiedMetaclass]
+class Foo(metaclass=foo.Bar): pass
+[out]
+MypyFile:1(
+  ClassDef:1(
+    Foo
+    Metaclass(foo.Bar)
+    PassStmt:1()))
+
 [case testBaseAndMetaclass]
 class Foo(foo.bar[x], metaclass=Bar): pass
 [out]
@@ -2703,35 +2702,36 @@ MypyFile:1(
     Block:4(
       PassStmt:6())))
 
-[case testCommentMethodAnnotation]
-class A:
-  def f(self):
-    # type: () -> A
-    pass
-  def g(xself, x):
-    # type: (A) -> B
-    pass
-[out]
-MypyFile:1(
-  ClassDef:1(
-    A
-    FuncDef:2(
-      f
-      Args(
-        Var(self))
-      def (self: Any) -> A?
-      Block:2(
-        PassStmt:4()))
-    FuncDef:5(
-      g
-      Args(
-        Var(xself)
-        Var(x))
-      def (xself: Any, x: A?) -> B?
-      Block:5(
-        PassStmt:7()))))
-
--- !!! function annotation on the same line
+-- !!! handle self
+-- [case testCommentMethodAnnotation]
+-- class A:
+--   def f(self):
+--     # type: () -> A
+--     pass
+--   def g(xself, x):
+--     # type: (A) -> B
+--     pass
+-- [out]
+-- MypyFile:1(
+--   ClassDef:1(
+--     A
+--     FuncDef:2(
+--       f
+--       Args(
+--         Var(self))
+--       def (self: Any) -> A?
+--       Block:2(
+--         PassStmt:4()))
+--     FuncDef:5(
+--       g
+--       Args(
+--         Var(xself)
+--         Var(x))
+--       def (xself: Any, x: A?) -> B?
+--       Block:5(
+--         PassStmt:7()))))
+-- 
+-- !!! TODO: handle self
 -- [case testCommentMethodAnnotationAndNestedFunction]
 -- class A:
 --   def f(self): # type: () -> A
@@ -2785,40 +2785,38 @@ MypyFile:1(
     Block:1(
       PassStmt:5())))
 
--- !!! function annotation on the same line
--- [case testCommentFunctionAnnotationAndVarArg]
--- def f(x, *y): # type: (X, *Y) -> Z
---   pass
--- [out]
--- MypyFile:1(
---   FuncDef:1(
---     f
---     Args(
---       Var(x))
---     def (x: X?, *y: Y?) -> Z?
---     VarArg(
---       Var(y))
---     Block:1(
---       PassStmt:2())))
--- 
--- !!! function annotation on the same line
--- [case testCommentFunctionAnnotationAndAllVarArgs]
--- def f(x, *y, **z): # type: (X, *Y, **Z) -> A
---   pass
--- [out]
--- MypyFile:1(
---   FuncDef:1(
---     f
---     Args(
---       Var(x))
---     def (x: X?, *y: Y?, **z: Z?) -> A?
---     VarArg(
---       Var(y))
---     DictVarArg(
---       Var(z))
---     Block:1(
---       PassStmt:2())))
--- 
+[case testCommentFunctionAnnotationAndVarArg]
+def f(x, *y): # type: (X, *Y) -> Z
+  pass
+[out]
+MypyFile:1(
+  FuncDef:1(
+    f
+    Args(
+      Var(x))
+    def (x: X?, *y: Y?) -> Z?
+    VarArg(
+      Var(y))
+    Block:1(
+      PassStmt:2())))
+
+[case testCommentFunctionAnnotationAndAllVarArgs]
+def f(x, *y, **z): # type: (X, *Y, **Z) -> A
+  pass
+[out]
+MypyFile:1(
+  FuncDef:1(
+    f
+    Args(
+      Var(x))
+    def (x: X?, *y: Y?, **z: Z?) -> A?
+    VarArg(
+      Var(y))
+    DictVarArg(
+      Var(z))
+    Block:1(
+      PassStmt:2())))
+
 [case testClassDecorator]
 @foo
 class X: pass

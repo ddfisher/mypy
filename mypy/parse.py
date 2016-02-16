@@ -342,18 +342,7 @@ class ASTConverter(NodeTransformer):
     #              arg? kwarg, expr* defaults)
     @with_line
     def visit_FunctionDef(self, n):
-        def to_type(type_ast):
-            if type_ast:
-                print("type: " + dump(type_ast))
-            return TypeConverter().visit(type_ast)
-
-        pos_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_OPT if d else ARG_POS)
-                    for a, d in zip(n.args.args, [None] * (len(n.args.args) - len(n.args.defaults)) + n.args.defaults)]
-        var_arg = [Argument(Var(n.args.vararg.arg), to_type(n.args.vararg.annotation), None, ARG_STAR)] if n.args.vararg is not None else []
-        kw_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_NAMED)
-                   for a, d in zip(n.args.kwonlyargs, [None] * (len(n.args.kwonlyargs) - len(n.args.kw_defaults)) + n.args.kw_defaults)]
-        kwarg = [Argument(Var(n.args.kwarg.arg), to_type(n.args.kwarg.annotation), None, ARG_STAR2)] if n.args.kwarg is not None else []
-        args = pos_args + var_arg + kw_args + kwarg
+        args = self.transform_args(n.args)
 
         arg_kinds = [arg.kind for arg in args]
         arg_names = [arg.variable.name() for arg in args]
@@ -391,8 +380,52 @@ class ASTConverter(NodeTransformer):
         else:
             return func_def
 
+    def transform_args(self, args):
+        def make_argument(arg, default, kind):
+            arg_type = TypeConverter().visit(arg.annotation)
+            return Argument(Var(arg.arg), arg_type, self.visit(default), kind)
+
+        new_args = []
+        num_no_defaults = len(args.args) - len(args.defaults)
+        # positional arguments without defaults
+        for a in args.args[ : num_no_defaults]:
+            new_args.append(make_argument(a, None, ARG_POS))
+
+        # positional arguments with defaults
+        for a, d in zip(args.args[num_no_defaults : ], args.defaults):
+            new_args.append(make_argument(a, d, ARG_OPT))
+
+        # *arg
+        if args.vararg is not None:
+            new_args.append(make_argument(args.vararg, None, ARG_STAR))
+
+        num_no_kw_defaults = len(args.kwonlyargs) - len(args.kw_defaults)
+        # keyword-only arguments without defaults
+        for a in args.kwonlyargs[ : num_no_kw_defaults]:
+            new_args.append(make_argument(a, None, ARG_NAMED))
+
+        # keyword-only arguments with defaults
+        for a, d in zip(args.kwonlyargs[num_no_kw_defaults : ], args.kw_defaults):
+            new_args.append(make_argument(a, d, ARG_NAMED))
+
+        # **kwarg
+        if args.kwarg is not None:
+            new_args.append(make_argument(args.kwarg, None, ARG_STAR2))
+
+        return new_args
+
+
     # TODO: AsyncFunctionDef(identifier name, arguments args,
     #                  stmt* body, expr* decorator_list, expr? returns, string? type_comment)
+
+
+    def stringify_name(self, n):
+        if isinstance(n, typed_ast.Name):
+            return n.id
+        elif isinstance(n, typed_ast.Attribute):
+            return "{}.{}".format(self.stringify_name(n.value), n.attr)
+        else:
+            assert False, "can't stringify " + str(type(n))
 
     # ClassDef(identifier name,
     #  expr* bases,
@@ -404,9 +437,7 @@ class ASTConverter(NodeTransformer):
         metaclass_arg = find(lambda x: x.arg == 'metaclass', n.keywords)
         metaclass = None
         if metaclass_arg:
-            metaclass_expr = self.visit(metaclass_arg.value)
-            assert isinstance(metaclass_expr, NameExpr)
-            metaclass = metaclass_expr.name
+            metaclass = self.stringify_name(metaclass_arg.value)
 
         cdef = ClassDef(n.name,
                         Block(self.visit(n.body)),
@@ -615,21 +646,10 @@ class ASTConverter(NodeTransformer):
     # Lambda(arguments args, expr body)
     @with_line
     def visit_Lambda(self, n):
-        def to_type(type_ast):
-            return TypeConverter().visit(type_ast)
-
-        pos_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_OPT if d else ARG_POS)
-                    for a, d in zip(n.args.args, [None] * (len(n.args.args) - len(n.args.defaults)) + n.args.defaults)]
-        var_arg = [Argument(Var(n.args.vararg.arg), to_type(n.args.vararg.annotation), None, ARG_STAR)] if n.args.vararg is not None else []
-        kw_args = [Argument(Var(a.arg), to_type(a.annotation), self.visit(d), ARG_NAMED)
-                   for a, d in zip(n.args.kwonlyargs, [None] * (len(n.args.kwonlyargs) - len(n.args.kw_defaults)) + n.args.kw_defaults)]
-        kwarg = [Argument(Var(n.args.kwarg.arg), to_type(n.args.kwarg.annotation), None, ARG_STAR2)] if n.args.kwarg is not None else []
-        args = pos_args + var_arg + kw_args + kwarg
-
         body = typed_ast.Return(n.body)
         body.lineno = n.lineno
 
-        return FuncExpr(args,
+        return FuncExpr(self.transform_args(n.args),
                         self.as_block([body], n.lineno))
 
     # IfExp(expr test, expr body, expr orelse)

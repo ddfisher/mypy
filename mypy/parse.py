@@ -259,6 +259,9 @@ def find(f, seq):
   return None
 
 class ASTConverter(NodeTransformer):
+    def __init__(self):
+        self.in_class = False
+
     def visit_NoneType(self, n):
         return None
 
@@ -326,8 +329,40 @@ class ASTConverter(NodeTransformer):
         return b
 
 
+    def fix_function_overloads(self, stmts):
+        # def is_overload(stmt):
+        #     return (isinstance(stmt, Decorator) and
+        #             any(isinstance(d, NameExpr) and d.name == 'overload' for d in stmt.decorators))
+
+        ret = []
+        current_overload = []
+        current_overload_name = None
+        # mypy doesn't actually check that the decorator is literally @overload
+        for stmt in stmts:
+            if isinstance(stmt, Decorator) and stmt.name() == current_overload_name:
+                current_overload.append(stmt)
+            else:
+                if len(current_overload) == 1:
+                    ret.append(current_overload[0])
+                elif len(current_overload) > 1:
+                    ret.append(OverloadedFuncDef(current_overload))
+
+                if isinstance(stmt, Decorator):
+                    current_overload = [stmt]
+                    current_overload_name = stmt.name()
+                else:
+                    current_overload = []
+                    current_overload_name = None
+                    ret.append(stmt)
+
+        if len(current_overload) == 1:
+            ret.append(current_overload[0])
+        elif len(current_overload) > 1:
+            ret.append(OverloadedFuncDef(current_overload))
+        return ret
+
     def visit_Module(self, mod):
-        body = [self.visit(b) for b in mod.body]
+        body = self.fix_function_overloads(self.visit(mod.body))
 
         return MypyFile(body,
                         [s for s in body if isinstance(s, ImportBase)],  # TODO: make sure this is all the imports we need
@@ -351,6 +386,10 @@ class ASTConverter(NodeTransformer):
             arg_types = [a if a is not None else AnyType() for
                          a in TypeConverter().visit(func_type_ast.argtypes)]
             return_type= TypeConverter().visit(func_type_ast.returns)
+
+            # add implicit self type
+            if self.in_class and len(arg_types) < len(args):
+                arg_types.insert(0, AnyType())
         else:
             arg_types = [a.type_annotation for a in args]
             return_type= TypeConverter().visit(n.returns)
@@ -434,17 +473,19 @@ class ASTConverter(NodeTransformer):
     #  expr* decorator_list)
     @with_line
     def visit_ClassDef(self, n):
+        self.in_class = True
         metaclass_arg = find(lambda x: x.arg == 'metaclass', n.keywords)
         metaclass = None
         if metaclass_arg:
             metaclass = self.stringify_name(metaclass_arg.value)
 
         cdef = ClassDef(n.name,
-                        Block(self.visit(n.body)),
+                        Block(self.fix_function_overloads(self.visit(n.body))),
                         None,
                         self.visit(n.bases),
                         metaclass=metaclass)
         cdef.decorators = self.visit(n.decorator_list)
+        self.in_class = False
         return cdef
 
 
@@ -457,7 +498,6 @@ class ASTConverter(NodeTransformer):
     # Delete(expr* targets)
     @with_line
     def visit_Delete(self, n):
-        # TODO: process more than the first target
         if len(n.targets) > 1:
             tup = TupleExpr(self.visit(n.targets))
             tup.set_line(n.lineno)
@@ -814,13 +854,6 @@ class ASTConverter(NodeTransformer):
     def visit_Index(self, n):
         return self.visit(n.value)
 
-    # --- arg ---
-    # (identifier arg, expr? annotation)
-    #        attributes (int lineno, int col_offset)
-    def visit_arg(self, n):
-        # TODO: defaults
-        # TODO: arg kind
-        return Argument(Var(n.arg), self.visit(n.annotation), None, ARG_POS)
 
 class TypeConverter(NodeTransformer):
     def visit_NoneType(self, n):

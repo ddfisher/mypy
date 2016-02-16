@@ -85,7 +85,7 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
         ast = typed_ast.parse(source, fnam, 'exec')
     except SyntaxError as e:
         if errors:
-            errors.report(e.lineno, e.text)
+            errors.report(e.lineno, str(e))
         else:
             raise
     else:
@@ -94,6 +94,12 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
         tree.path = fnam
         tree.is_stub = is_stub_file
         return tree
+
+    return MypyFile([],
+                    [],
+                    False,
+                    set(),
+                    weak_opts=set())
 
 
 def convert_ast(ast):

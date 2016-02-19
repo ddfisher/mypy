@@ -120,6 +120,7 @@ def build(sources: List[BuildSource],
           pyversion: Tuple[int, int] = defaults.PYTHON3_VERSION,
           custom_typing_module: str = None,
           implicit_any: bool = False,
+          fast_parser: bool = False,
           report_dirs: Dict[str, str] = {},
           flags: List[str] = None,
           python_path: bool = False) -> BuildResult:
@@ -140,6 +141,7 @@ def build(sources: List[BuildSource],
       pyversion: Python version (major, minor)
       custom_typing_module: if not None, use this module id as an alias for typing
       implicit_any: if True, add implicit Any signatures to all functions
+      fast_parser: if True, use the experimental fast cpython-based parser
       flags: list of build options (e.g. COMPILE_ONLY)
     """
     flags = flags or []
@@ -189,6 +191,7 @@ def build(sources: List[BuildSource],
                            ignore_prefix=os.getcwd(),
                            custom_typing_module=custom_typing_module,
                            implicit_any=implicit_any,
+                           fast_parser=fast_parser,
                            reports=reports)
 
     # Construct information that describes the initial files. __main__ is the
@@ -346,6 +349,7 @@ class BuildManager:
                  ignore_prefix: str,
                  custom_typing_module: str,
                  implicit_any: bool,
+                 fast_parser: bool,
                  reports: Reports) -> None:
         self.data_dir = data_dir
         self.errors = Errors()
@@ -356,6 +360,7 @@ class BuildManager:
         self.flags = flags
         self.custom_typing_module = custom_typing_module
         self.implicit_any = implicit_any
+        self.fast_parser = fast_parser
         self.reports = reports
         self.semantic_analyzer = SemanticAnalyzer(lib_path, self.errors,
                                                   pyversion=pyversion)
@@ -746,7 +751,9 @@ class UnprocessedFile(State):
                 sem_anal.modules[p].names[c[-1]] = SymbolTableNode(
                     MODULE_REF, tree, p)
 
-        if self.id != 'builtins':
+        if self.id == 'builtins':
+            tree.defs.extend(parse.implicit_builtins)
+        else:
             # The builtins module is imported implicitly in every program (it
             # contains definitions of int, print etc.).
             self.manager.trace('import builtins')
@@ -828,7 +835,8 @@ class UnprocessedFile(State):
         tree = parse.parse(source_text, fnam, self.errors(),
                            pyversion=self.manager.pyversion,
                            custom_typing_module=self.manager.custom_typing_module,
-                           implicit_any=self.manager.implicit_any)
+                           implicit_any=self.manager.implicit_any,
+                           fast_parser=self.manager.fast_parser)
         tree._fullname = self.id
         if self.errors().num_messages() != num_errs:
             self.errors().raise_error()

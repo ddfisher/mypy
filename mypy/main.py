@@ -28,6 +28,7 @@ class Options:
         self.pyversion = defaults.PYTHON3_VERSION
         self.custom_typing_module = None  # type: str
         self.implicit_any = False
+        self.fast_parser = False
         self.report_dirs = {}  # type: Dict[str, str]
         self.python_path = False
         self.dirty_stubs = False
@@ -93,6 +94,7 @@ def type_check_only(sources: List[BuildSource],
                 pyversion=options.pyversion,
                 custom_typing_module=options.custom_typing_module,
                 implicit_any=options.implicit_any,
+                fast_parser=options.fast_parser,
                 report_dirs=options.report_dirs,
                 flags=options.build_flags,
                 python_path=options.python_path)
@@ -177,6 +179,9 @@ def process_options(args: List[str]) -> Tuple[List[BuildSource], Options]:
             args = args[1:]
         elif args[0] == '--implicit-any':
             options.implicit_any = True
+            args = args[1:]
+        elif args[0] == '--fast-parser':
+            options.fast_parser = True
             args = args[1:]
         elif args[0] in ('--version', '-V'):
             ver = True

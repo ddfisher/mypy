@@ -70,7 +70,6 @@ implicit_module_attrs = {'__name__': '__builtins__.str',
                          '__file__': '__builtins__.str',
                          '__package__': '__builtins__.str'}
 
-
 type_aliases = {
     'typing.List': '__builtins__.list',
     'typing.Dict': '__builtins__.dict',
@@ -1212,7 +1211,7 @@ class DictExpr(Node):
         if all(x[0].literal == LITERAL_YES and x[1].literal == LITERAL_YES
                for x in items):
             self.literal = LITERAL_YES
-            self.literal_hash = ('Dict',) + tuple((x[0].literal_hash, x[1].literal_hash)
+            self.literal_hash = ('Dict',) + tuple((x[0].literal_hash, x[1].literal_hash)  # type: ignore
                                                   for x in items)  # type: ignore
 
     def accept(self, visitor: NodeVisitor[T]) -> T:

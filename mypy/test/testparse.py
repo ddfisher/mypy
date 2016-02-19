@@ -16,8 +16,7 @@ from mypy.errors import CompileError
 
 
 class ParserSuite(Suite):
-    parse_files = ['parse.test',
-                   'parse-python2.test']
+    parse_files = ['parse.test']
 
     def cases(self):
         # The test case descriptions are stored in data files.
@@ -54,12 +53,12 @@ def test_parser(testcase):
 INPUT_FILE_NAME = 'file'
 
 
-class ParseErrorSuite(Suite):
-    def cases(self):
-        # Test case descriptions are in an external file.
-        return parse_test_cases(os.path.join(config.test_data_prefix,
-                                             'parse-errors.test'),
-                                test_parse_error)
+# class ParseErrorSuite(Suite):
+#     def cases(self):
+#         # Test case descriptions are in an external file.
+#         return parse_test_cases(os.path.join(config.test_data_prefix,
+#                                              'parse-errors.test'),
+#                                 test_parse_error)
 
 
 def test_parse_error(testcase):

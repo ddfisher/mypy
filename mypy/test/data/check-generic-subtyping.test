@@ -636,8 +636,6 @@ s, s = Nums() # E: Incompatible types in assignment (expression has type "int", 
 
 [case testCovariant]
 from typing import TypeVar, Generic
-True = 1
-
 T = TypeVar('T', covariant=True)
 
 class G(Generic[T]): pass
@@ -655,8 +653,6 @@ b = c
 
 [case testContravariant]
 from typing import TypeVar, Generic
-True = 1
-
 T = TypeVar('T', contravariant=True)
 
 class G(Generic[T]): pass
@@ -674,8 +670,6 @@ b = c  # E: Incompatible types in assignment (expression has type G[C], variable
 
 [case testInvariant]
 from typing import TypeVar, Generic
-True = 1
-
 T = TypeVar('T')  # invariant (default)
 
 class G(Generic[T]): pass

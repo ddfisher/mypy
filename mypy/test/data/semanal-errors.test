@@ -3,9 +3,7 @@ in 1
 def f():
   1 1
 [out]
-main:1: error: Parse error before in
-main: note: In function "f":
-main:3: error: Parse error before numeric literal
+main:1: error: invalid syntax
 
 [case testUndefinedVariableInGlobalStatement]
 import typing
@@ -669,16 +667,14 @@ main:5: error: Name 'g' already defined
 
 [case testRedefinedOverloadedFunction]
 from typing import overload, Any
-def f():
-    @overload
-    def p(o: object) -> None: pass # no error
-    @overload
-    def p(o: Any) -> None: pass    # no error
-    x = 1
-    def p(): pass # fail
+@overload
+def p(o: object) -> None: pass # no error
+@overload
+def p(o: Any) -> None: pass    # no error
+x = 1
+def p(): pass # fail
 [out]
-main: note: In function "f":
-main:8: error: Name 'p' already defined
+main:7: error: Name 'p' already defined
 
 [case testNestedFunctionInMethod]
 import typing
@@ -873,7 +869,7 @@ import typing
 def f(): pass
 f() = 1 # type: int
 [out]
-main:3: error: Invalid assignment target
+main:3: error: can't assign to function call
 
 [case testIndexedAssignmentWithTypeDeclaration]
 import typing

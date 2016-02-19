@@ -7,6 +7,7 @@ class type:
 # These are provided here for convenience.
 class int: pass
 class str: pass
+class bool: pass
 
 class tuple: pass
 class function: pass

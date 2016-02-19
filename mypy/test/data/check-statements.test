@@ -842,7 +842,7 @@ main: note: In function "f":
 
 [case testYieldFromNotAppliedToNothing]
 def h():
-    yield from  # E: Parse error before end of line
+    yield from  # E: invalid syntax
 [out]
 main: note: In function "h":
 

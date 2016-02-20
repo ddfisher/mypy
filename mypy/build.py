@@ -51,6 +51,7 @@ TEST_BUILTINS = 'test-builtins'  # Use stub builtins to speed up tests
 DUMP_TYPE_STATS = 'dump-type-stats'
 DUMP_INFER_STATS = 'dump-infer-stats'
 SILENT_IMPORTS = 'silent-imports'  # Silence imports of .py files
+FAST_PARSER = 'fast-parser'      # Use experimental fast parser
 
 # State ids. These describe the states a source file / module can be in a
 # build.
@@ -120,7 +121,6 @@ def build(sources: List[BuildSource],
           pyversion: Tuple[int, int] = defaults.PYTHON3_VERSION,
           custom_typing_module: str = None,
           implicit_any: bool = False,
-          fast_parser: bool = False,
           report_dirs: Dict[str, str] = {},
           flags: List[str] = None,
           python_path: bool = False) -> BuildResult:
@@ -141,7 +141,6 @@ def build(sources: List[BuildSource],
       pyversion: Python version (major, minor)
       custom_typing_module: if not None, use this module id as an alias for typing
       implicit_any: if True, add implicit Any signatures to all functions
-      fast_parser: if True, use the experimental fast cpython-based parser
       flags: list of build options (e.g. COMPILE_ONLY)
     """
     flags = flags or []
@@ -191,7 +190,6 @@ def build(sources: List[BuildSource],
                            ignore_prefix=os.getcwd(),
                            custom_typing_module=custom_typing_module,
                            implicit_any=implicit_any,
-                           fast_parser=fast_parser,
                            reports=reports)
 
     # Construct information that describes the initial files. __main__ is the
@@ -349,7 +347,6 @@ class BuildManager:
                  ignore_prefix: str,
                  custom_typing_module: str,
                  implicit_any: bool,
-                 fast_parser: bool,
                  reports: Reports) -> None:
         self.data_dir = data_dir
         self.errors = Errors()
@@ -360,7 +357,6 @@ class BuildManager:
         self.flags = flags
         self.custom_typing_module = custom_typing_module
         self.implicit_any = implicit_any
-        self.fast_parser = fast_parser
         self.reports = reports
         self.semantic_analyzer = SemanticAnalyzer(lib_path, self.errors,
                                                   pyversion=pyversion)
@@ -834,7 +830,7 @@ class UnprocessedFile(State):
                            pyversion=self.manager.pyversion,
                            custom_typing_module=self.manager.custom_typing_module,
                            implicit_any=self.manager.implicit_any,
-                           fast_parser=self.manager.fast_parser)
+                           fast_parser=FAST_PARSER in self.manager.flags)
         tree._fullname = self.id
         if self.errors().num_messages() != num_errs:
             self.errors().raise_error()

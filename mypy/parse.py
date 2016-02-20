@@ -68,12 +68,6 @@ op_comp = set([
 none = Token('')  # Empty token
 
 
-implicit_builtins = [
-    AssignmentStmt([NameExpr('True')], NameExpr('None'), UnboundType('bool')),
-    AssignmentStmt([NameExpr('False')], NameExpr('None'), UnboundType('bool')),
-    AssignmentStmt([NameExpr('__debug__')], NameExpr('None'), UnboundType('bool'))
-]
-
 def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
           pyversion: Tuple[int, int] = defaults.PYTHON3_VERSION,
           custom_typing_module: str = None, implicit_any: bool = False,

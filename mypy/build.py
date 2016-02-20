@@ -751,9 +751,7 @@ class UnprocessedFile(State):
                 sem_anal.modules[p].names[c[-1]] = SymbolTableNode(
                     MODULE_REF, tree, p)
 
-        if self.id == 'builtins':
-            tree.defs.extend(parse.implicit_builtins)
-        else:
+        if self.id != 'builtins':
             # The builtins module is imported implicitly in every program (it
             # contains definitions of int, print etc.).
             self.manager.trace('import builtins')

@@ -200,6 +200,10 @@ def process_options(args: List[str]) -> Tuple[List[BuildSource], Options]:
         usage('Python version 2 (or --py2) specified, '
               'but --use-python-path will search in sys.path of Python 3')
 
+    if build.FAST_PARSER in options.build_flags and options.pyversion[0] == 2:
+        usage('The experimental fast parser is only compatible with Python 3, '
+              'but Python 2 specified.')
+
     targets = []
     for arg in args:
         if arg.endswith(PY_EXTENSIONS):

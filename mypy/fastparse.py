@@ -1,4 +1,5 @@
 from functools import wraps
+import sys
 
 from typing import Tuple, Union, TypeVar, Callable, Sequence
 from mypy.nodes import (
@@ -19,7 +20,13 @@ from mypy.types import Type, CallableType, AnyType, UnboundType, TupleType, Type
 from mypy import defaults
 from mypy.errors import Errors
 
-import typed_ast  # type: ignore
+try:
+    import typed_ast  # type: ignore
+except ImportError:
+    print('You must install the typed_ast module before you can run mypy with `--fast-parser`.\n'
+          'The typed_ast module can be found at https://github.com/ddfisher/typed_ast',
+          file=sys.stderr)
+    sys.exit(1)
 
 T = TypeVar('T')
 

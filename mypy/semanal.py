@@ -2230,7 +2230,6 @@ class FirstPass(NodeVisitor):
                 v._fullname = self.sem.qualified_name(name)
                 self.sem.globals[name] = SymbolTableNode(GDEF, v, self.sem.cur_mod_id)
 
-
     def visit_block(self, b: Block) -> None:
         if b.is_unreachable:
             return

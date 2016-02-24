@@ -30,6 +30,7 @@ except ImportError:
 
 T = TypeVar('T')
 
+
 def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
           pyversion: Tuple[int, int] = defaults.PYTHON3_VERSION,
           custom_typing_module: str = None, implicit_any: bool = False) -> MypyFile:
@@ -51,7 +52,7 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
         else:
             raise
     else:
-        tree =ASTConverter().visit(ast)
+        tree = ASTConverter().visit(ast)
         tree.path = fnam
         tree.is_stub = is_stub_file
         return tree
@@ -62,9 +63,11 @@ def parse(source: Union[str, bytes], fnam: str = None, errors: Errors = None,
                     set(),
                     weak_opts=set())
 
+
 def parse_type_comment(type_comment: str, line: int) -> Type:
     typ = typed_ast.parse(type_comment, '<type_comment>', 'eval')
     return TypeConverter(line=line).visit(typ.body)
+
 
 def with_line(f):
     @wraps(f)
@@ -74,11 +77,13 @@ def with_line(f):
         return node
     return wrapper
 
+
 def find(f: Callable[[T], bool], seq: Sequence[T]) -> T:
-  for item in seq:
-    if f(item):
-      return item
-  return None
+    for item in seq:
+        if f(item):
+            return item
+    return None
+
 
 class ASTConverter(typed_ast.NodeTransformer):
     def __init__(self):
@@ -154,7 +159,6 @@ class ASTConverter(typed_ast.NodeTransformer):
             b.set_line(lineno)
         return b
 
-
     def fix_function_overloads(self, stmts):
         ret = []
         current_overload = []
@@ -207,14 +211,14 @@ class ASTConverter(typed_ast.NodeTransformer):
             func_type_ast = typed_ast.parse(n.type_comment, '<func_type>', 'func_type')
             arg_types = [a if a is not None else AnyType() for
                          a in TypeConverter(line=n.lineno).visit(func_type_ast.argtypes)]
-            return_type= TypeConverter(line=n.lineno).visit(func_type_ast.returns)
+            return_type = TypeConverter(line=n.lineno).visit(func_type_ast.returns)
 
             # add implicit self type
             if self.in_class and len(arg_types) < len(args):
                 arg_types.insert(0, AnyType())
         else:
             arg_types = [a.type_annotation for a in args]
-            return_type= TypeConverter(line=n.lineno).visit(n.returns)
+            return_type = TypeConverter(line=n.lineno).visit(n.returns)
 
         func_type = None
         if any(arg_types) or return_type:
@@ -223,7 +227,6 @@ class ASTConverter(typed_ast.NodeTransformer):
                                      arg_names,
                                      return_type if return_type is not None else AnyType(),
                                      None)
-
 
         func_def = FuncDef(n.name,
                        args,
@@ -252,11 +255,11 @@ class ASTConverter(typed_ast.NodeTransformer):
         new_args = []
         num_no_defaults = len(args.args) - len(args.defaults)
         # positional arguments without defaults
-        for a in args.args[ : num_no_defaults]:
+        for a in args.args[:num_no_defaults]:
             new_args.append(make_argument(a, None, ARG_POS))
 
         # positional arguments with defaults
-        for a, d in zip(args.args[num_no_defaults : ], args.defaults):
+        for a, d in zip(args.args[num_no_defaults:], args.defaults):
             new_args.append(make_argument(a, d, ARG_OPT))
 
         # *arg
@@ -265,11 +268,11 @@ class ASTConverter(typed_ast.NodeTransformer):
 
         num_no_kw_defaults = len(args.kwonlyargs) - len(args.kw_defaults)
         # keyword-only arguments without defaults
-        for a in args.kwonlyargs[ : num_no_kw_defaults]:
+        for a in args.kwonlyargs[:num_no_kw_defaults]:
             new_args.append(make_argument(a, None, ARG_NAMED))
 
         # keyword-only arguments with defaults
-        for a, d in zip(args.kwonlyargs[num_no_kw_defaults : ], args.kw_defaults):
+        for a, d in zip(args.kwonlyargs[num_no_kw_defaults:], args.kw_defaults):
             new_args.append(make_argument(a, d, ARG_NAMED))
 
         # **kwarg
@@ -278,10 +281,8 @@ class ASTConverter(typed_ast.NodeTransformer):
 
         return new_args
 
-
     # TODO: AsyncFunctionDef(identifier name, arguments args,
     #                  stmt* body, expr* decorator_list, expr? returns, string? type_comment)
-
 
     def stringify_name(self, n):
         if isinstance(n, typed_ast.Name):
@@ -313,12 +314,10 @@ class ASTConverter(typed_ast.NodeTransformer):
         self.in_class = False
         return cdef
 
-
     # Return(expr? value)
     @with_line
     def visit_Return(self, n):
         return ReturnStmt(self.visit(n.value))
-
 
     # Delete(expr* targets)
     @with_line
@@ -329,7 +328,6 @@ class ASTConverter(typed_ast.NodeTransformer):
             return DelStmt(tup)
         else:
             return DelStmt(self.visit(n.targets[0]))
-
 
     # Assign(expr* targets, expr value, string? type_comment)
     @with_line
@@ -348,7 +346,6 @@ class ASTConverter(typed_ast.NodeTransformer):
         return OperatorAssignmentStmt(self.from_operator(n.op),
                               self.visit(n.target),
                               self.visit(n.value))
-
 
     # For(expr target, expr iter, stmt* body, stmt* orelse, string? type_comment)
     @with_line
@@ -406,14 +403,12 @@ class ASTConverter(typed_ast.NodeTransformer):
     def visit_Assert(self, n):
         return AssertStmt(self.visit(n.test))
 
-
     # Import(alias* names)
     @with_line
     def visit_Import(self, n):
         i = Import([(a.name, a.asname) for a in n.names])
         self.imports.append(i)
         return i
-
 
     # ImportFrom(identifier? module, alias* names, int? level)
     @with_line
@@ -426,7 +421,6 @@ class ASTConverter(typed_ast.NodeTransformer):
                            [(a.name, a.asname) for a in n.names])
         self.imports.append(i)
         return i
-
 
     # Global(identifier* names)
     @with_line
@@ -460,7 +454,6 @@ class ASTConverter(typed_ast.NodeTransformer):
         return ContinueStmt()
 
     # --- expr ---
-
     # BoolOp(boolop op, expr* values)
     @with_line
     def visit_BoolOp(self, n):
@@ -511,7 +504,6 @@ class ASTConverter(typed_ast.NodeTransformer):
 
         return UnaryExpr(op, self.visit(n.operand))
 
-
     # Lambda(arguments args, expr body)
     @with_line
     def visit_Lambda(self, n):
@@ -551,9 +543,9 @@ class ASTConverter(typed_ast.NodeTransformer):
     # DictComp(expr key, expr value, comprehension* generators)
     @with_line
     def visit_DictComp(self, n):
-        targets  = [self.visit(c.target) for c in n.generators]
-        iters    = [self.visit(c.iter)   for c in n.generators]
-        ifs_list = [self.visit(c.ifs)    for c in n.generators]
+        targets = [self.visit(c.target) for c in n.generators]
+        iters = [self.visit(c.iter) for c in n.generators]
+        ifs_list = [self.visit(c.ifs) for c in n.generators]
         return DictionaryComprehension(self.visit(n.key),
                                        self.visit(n.value),
                                        targets,
@@ -563,9 +555,9 @@ class ASTConverter(typed_ast.NodeTransformer):
     # GeneratorExp(expr elt, comprehension* generators)
     @with_line
     def visit_GeneratorExp(self, n):
-        targets  = [self.visit(c.target) for c in n.generators]
-        iters    = [self.visit(c.iter)   for c in n.generators]
-        ifs_list = [self.visit(c.ifs)    for c in n.generators]
+        targets = [self.visit(c.target) for c in n.generators]
+        iters = [self.visit(c.iter) for c in n.generators]
+        ifs_list = [self.visit(c.ifs) for c in n.generators]
         return GeneratorExpr(self.visit(n.elt),
                              targets,
                              iters,
@@ -583,7 +575,6 @@ class ASTConverter(typed_ast.NodeTransformer):
     def visit_YieldFrom(self, n):
         return YieldFromExpr(self.visit(n.value))
 
-
     # Compare(expr left, cmpop* ops, expr* comparators)
     @with_line
     def visit_Compare(self, n):
@@ -591,20 +582,24 @@ class ASTConverter(typed_ast.NodeTransformer):
         operands = self.visit([n.left] + n.comparators)
         return ComparisonExpr(operators, operands)
 
-
     # Call(expr func, expr* args, keyword* keywords)
     # keyword = (identifier? arg, expr value)
     @with_line
     def visit_Call(self, n):
         def is_stararg(a):
             return isinstance(a, typed_ast.Starred)
+
         def is_star2arg(k):
             return k.arg is None
-        return CallExpr(self.visit(n.func),
-                        self.visit([a.value if is_stararg(a) else a for a in n.args] + [k.value for k in n.keywords]),
-                        [ARG_STAR if is_stararg(a) else ARG_POS for a in n.args] + [ARG_STAR2 if is_star2arg(k) else ARG_NAMED for k in n.keywords],
-                        [None for _ in n.args] + [k.arg for k in n.keywords])
 
+        arg_types = self.visit([a.value if is_stararg(a) else a for a in n.args] +
+                               [k.value for k in n.keywords])
+        arg_kinds = ([ARG_STAR if is_stararg(a) else ARG_POS for a in n.args] +
+                     [ARG_STAR2 if is_star2arg(k) else ARG_NAMED for k in n.keywords])
+        return CallExpr(self.visit(n.func),
+                        arg_types,
+                        arg_kinds,
+                        [None for _ in n.args] + [k.arg for k in n.keywords])
 
     # Num(object n) -- a number as a PyObject.
     @with_line
@@ -629,7 +624,6 @@ class ASTConverter(typed_ast.NodeTransformer):
         # TODO: this is kind of hacky
         return BytesExpr(str(n.s)[2:-1])
 
-
     # NameConstant(singleton value)
     def visit_NameConstant(self, n):
         return NameExpr(str(n.value))
@@ -639,13 +633,12 @@ class ASTConverter(typed_ast.NodeTransformer):
     def visit_Ellipsis(self, n):
         return EllipsisExpr()
 
-
     # Attribute(expr value, identifier attr, expr_context ctx)
     @with_line
     def visit_Attribute(self, n):
         if (isinstance(n.value, typed_ast.Call) and
-              isinstance(n.value.func, typed_ast.Name) and
-              n.value.func.id == 'super'):
+                isinstance(n.value.func, typed_ast.Name) and
+                n.value.func.id == 'super'):
             return SuperExpr(n.attr)
 
         return MemberExpr(self.visit(n.value), n.attr)

@@ -68,11 +68,12 @@ may be useful:
 Can I use mypy to type check my existing Python code?
 *****************************************************
 
-It depends. Compatibility is pretty good, but several Python features
-are not yet implemented. The ultimate goal is to make using mypy
-practical for most Python code. Code that uses complex introspection
-or metaprogramming may be impractical to type check, but it should
-still be possible to use static typing in other parts of a program.
+It depends. Compatibility is pretty good, but some Python features are
+not yet implemented or fully supported. The ultimate goal is to make
+using mypy practical for most Python code. Code that uses complex
+introspection or metaprogramming may be impractical to type check, but
+it should still be possible to use static typing in other parts of a
+program.
 
 Will static typing make my programs run faster?
 ***********************************************
@@ -86,14 +87,13 @@ existing Python VMs to take advantage of static type information, but
 whether this is feasible is still unknown. This is nontrivial since
 the runtime types do not necessarily correspond to the static types.
 
-All of my code is still in Python 2. What are my options?
-*********************************************************
+How do I type check my Python 2 code?
+*************************************
 
-Mypy currently supports Python 3 syntax. Python 2 support is still in
-early stages of development. However, Python 2 support will be
-improving. Mypy includes a custom codec that lets you use Python 3
-function annotations in Python 2 code. The codec just removes the
-annotations before bytecode compilation.
+You can use a `comment-based function annotation syntax
+<https://www.python.org/dev/peps/pep-0484/#suggested-syntax-for-python-2-7-and-straddling-code>`_
+and use the ``--py2`` command-line option to type check your Python 2 code.
+You'll also need to install ``typing`` for Python 2 via ``pip install typing``.
 
 Is mypy free?
 *************
@@ -237,7 +237,7 @@ typed subsets of Python. Mypy does the following important things
 differently:
 
 - RPython is primarily designed for implementing virtual machines;
-  mypy is a general-purpose language.
+  mypy is a general-purpose tool.
 
 - Mypy supports both static and dynamic typing. Dynamically typed and
   statically typed code can be freely mixed and can interact

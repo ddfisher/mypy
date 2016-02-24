@@ -1760,6 +1760,7 @@ def function_type(func: FuncBase, fallback: 'mypy.types.Instance') -> 'mypy.type
             mypy.types.AnyType(),
             fallback,
             name,
+            implicit=True,
         )
 
 
